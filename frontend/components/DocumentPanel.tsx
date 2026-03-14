@@ -5,12 +5,11 @@ import {
   FileText,
   Upload,
   Trash2,
-  ChevronDown,
-  ChevronUp,
   Loader2,
   CheckCircle2,
   XCircle,
   Clock,
+  File
 } from 'lucide-react';
 import api from '@/lib/api';
 import toast from 'react-hot-toast';
@@ -52,10 +51,9 @@ function formatBytes(bytes: number): string {
 export default function DocumentPanel({ chatId }: DocumentPanelProps) {
   const [documents, setDocuments] = useState<Document[]>([]);
   const [uploading, setUploading] = useState(false);
-  const [collapsed, setCollapsed] = useState(false);
   const [dragging, setDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const hasProcessingRef = useRef(false);
 
   const fetchDocuments = useCallback(async () => {
     try {
@@ -66,27 +64,19 @@ export default function DocumentPanel({ chatId }: DocumentPanelProps) {
     }
   }, [chatId]);
 
-  // Poll for status updates while any document is processing
+  hasProcessingRef.current = documents.some(
+    (d) => d.embedding_status === 'processing' || d.embedding_status === 'pending'
+  );
+
   useEffect(() => {
     fetchDocuments();
+    const interval = setInterval(() => {
+      if (hasProcessingRef.current) {
+        fetchDocuments();
+      }
+    }, 3000);
+    return () => clearInterval(interval);
   }, [fetchDocuments]);
-
-  useEffect(() => {
-    const hasProcessing = documents.some(
-      (d) => d.embedding_status === 'processing' || d.embedding_status === 'pending'
-    );
-
-    if (hasProcessing && !pollRef.current) {
-      pollRef.current = setInterval(fetchDocuments, 3000);
-    } else if (!hasProcessing && pollRef.current) {
-      clearInterval(pollRef.current);
-      pollRef.current = null;
-    }
-
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
-  }, [documents, fetchDocuments]);
 
   const uploadFile = async (file: File) => {
     if (!file) return;
@@ -148,111 +138,118 @@ export default function DocumentPanel({ chatId }: DocumentPanelProps) {
   };
 
   return (
-    <div className="border-b border-[#111] bg-black shrink-0">
-      {/* Panel header */}
-      <button
-        onClick={() => setCollapsed(!collapsed)}
-        className="w-full flex items-center justify-between px-5 py-3 hover:bg-white/[0.02] transition-colors"
+    <div className="flex flex-col h-full bg-black p-8 max-w-4xl mx-auto w-full animate-in fade-in duration-300">
+      <div className="mb-8">
+        <h2 className="text-xl font-medium text-white/90">Knowledge Base</h2>
+        <p className="text-sm text-white/40 mt-1">
+          Upload PDFs, Markdown, or Text files. The AI will use these documents to answer your questions.
+        </p>
+      </div>
+
+      {/* Upload area */}
+      <div
+        onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={handleDrop}
+        onClick={() => !uploading && fileInputRef.current?.click()}
+        className={`flex flex-col items-center justify-center gap-4 h-48 rounded-2xl border-2 border-dashed cursor-pointer transition-all mb-10 ${
+          dragging
+            ? 'border-white/40 bg-white/[0.06]'
+            : 'border-[#1f1f1f] hover:border-white/20 hover:bg-white/[0.03]'
+        } ${uploading ? 'opacity-50 cursor-not-allowed' : ''}`}
       >
-        <div className="flex items-center gap-2">
-          <FileText size={13} className="text-white/30" />
-          <span className="text-xs font-medium text-white/50">
-            Documents
-          </span>
-          {documents.length > 0 && (
-            <span className="text-[10px] bg-white/10 text-white/40 rounded-full px-1.5 py-0.5 ml-1">
-              {documents.length}
-            </span>
-          )}
-          {documents.some((d) => d.embedding_status === 'processing') && (
-            <Loader2 size={10} className="text-yellow-400 animate-spin ml-1" />
-          )}
-        </div>
-        {collapsed ? <ChevronDown size={12} className="text-white/20" /> : <ChevronUp size={12} className="text-white/20" />}
-      </button>
-
-      {!collapsed && (
-        <div className="px-5 pb-3 space-y-2">
-          {/* Upload area */}
-          <div
-            onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
-            onDragLeave={() => setDragging(false)}
-            onDrop={handleDrop}
-            onClick={() => !uploading && fileInputRef.current?.click()}
-            className={`flex items-center justify-center gap-2 h-14 rounded-xl border border-dashed cursor-pointer transition-all ${
-              dragging
-                ? 'border-white/40 bg-white/[0.06]'
-                : 'border-[#1f1f1f] hover:border-white/20 hover:bg-white/[0.03]'
-            } ${uploading ? 'opacity-50 cursor-not-allowed' : ''}`}
-          >
-            {uploading ? (
-              <>
-                <Loader2 size={13} className="text-white/30 animate-spin" />
-                <span className="text-xs text-white/30">Uploading…</span>
-              </>
-            ) : (
-              <>
-                <Upload size={13} className="text-white/20" />
-                <span className="text-xs text-white/30">
-                  Drop PDF / TXT / MD or <span className="text-white/50">click</span>
-                </span>
-              </>
-            )}
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".pdf,.txt,.md"
-              onChange={handleFileChange}
-              className="hidden"
-            />
-          </div>
-
-          {/* Document list */}
-          {documents.length > 0 && (
-            <div className="space-y-1 max-h-48 overflow-y-auto">
-              {documents.map((doc) => {
-                const { icon: StatusIcon, color, label, spin } = STATUS_CONFIG[doc.embedding_status];
-                return (
-                  <div
-                    key={doc.id}
-                    className="flex items-center gap-2.5 px-2.5 py-2 rounded-lg bg-white/[0.02] border border-[#181818] group"
-                  >
-                    {/* Status icon */}
-                    <StatusIcon
-                      size={12}
-                      className={`${color} shrink-0 ${spin ? 'animate-spin' : ''}`}
-                    />
-
-                    {/* File info */}
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs text-white/70 truncate">{doc.original_name}</p>
-                      <p className="text-[10px] text-white/25">
-                        {label}
-                        {doc.embedding_status === 'ready' && doc.chunk_count
-                          ? ` · ${doc.chunk_count} chunks`
-                          : ''}
-                        {' · '}{formatBytes(doc.size_bytes)}
-                      </p>
-                    </div>
-
-                    {/* Delete */}
-                    <button
-                      onClick={() => handleDelete(doc.id, doc.original_name)}
-                      className="opacity-0 group-hover:opacity-100 p-1 text-white/20 hover:text-red-400 transition-all shrink-0"
-                    >
-                      <Trash2 size={11} />
-                    </button>
-                  </div>
-                );
-              })}
+        {uploading ? (
+          <>
+            <div className="w-12 h-12 rounded-full bg-white/5 flex items-center justify-center">
+              <Loader2 size={24} className="text-yellow-400 animate-spin" />
             </div>
-          )}
+            <span className="text-sm font-medium text-white/60">Uploading & Processing...</span>
+          </>
+        ) : (
+          <>
+            <div className="w-12 h-12 rounded-full bg-white/5 flex items-center justify-center text-white/30">
+              <Upload size={24} />
+            </div>
+            <div className="text-center">
+              <span className="text-sm font-medium text-white/70 block">
+                Click to upload or drag & drop
+              </span>
+              <span className="text-xs text-white/30 mt-1 block">
+                Supports PDF, TXT, MD (Max 10MB)
+              </span>
+            </div>
+          </>
+        )}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".pdf,.txt,.md"
+          onChange={handleFileChange}
+          className="hidden"
+        />
+      </div>
 
-          {documents.length === 0 && (
-            <p className="text-[10px] text-white/20 text-center pb-1">
-              Upload documents to enable RAG-grounded responses.
-            </p>
-          )}
+      {/* Document list */}
+      <div className="flex items-center gap-2 mb-4">
+        <File size={16} className="text-white/40" />
+        <h3 className="text-sm font-medium text-white/70">Uploaded Documents</h3>
+        {documents.length > 0 && (
+          <span className="text-xs bg-white/10 text-white/50 rounded-full px-2 py-0.5 ml-2">
+            {documents.length}
+          </span>
+        )}
+      </div>
+
+      {documents.length > 0 ? (
+        <div className="grid gap-3 overflow-y-auto pb-8">
+          {documents.map((doc) => {
+            const { icon: StatusIcon, color, label, spin } = STATUS_CONFIG[doc.embedding_status];
+            return (
+              <div
+                key={doc.id}
+                className="flex items-center gap-4 px-5 py-4 rounded-xl bg-white/[0.02] border border-[#181818] group hover:bg-white/[0.04] transition-colors"
+              >
+                {/* Status icon */}
+                <div className="w-10 h-10 rounded-full bg-black border border-[#222] flex items-center justify-center shrink-0">
+                  <StatusIcon
+                    size={18}
+                    className={`${color} ${spin ? 'animate-spin' : ''}`}
+                  />
+                </div>
+
+                {/* File info */}
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-white/80 truncate">{doc.original_name}</p>
+                  <p className="text-xs text-white/40 mt-0.5">
+                    {label}
+                    {doc.embedding_status === 'ready' && doc.chunk_count
+                      ? ` · ${doc.chunk_count} chunk(s) indexed`
+                      : ''}
+                    {' · '}{formatBytes(doc.size_bytes)}
+                    {' · '}{new Date(doc.created_at).toLocaleDateString()}
+                  </p>
+                </div>
+
+                {/* Delete */}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleDelete(doc.id, doc.original_name);
+                  }}
+                  className="opacity-0 group-hover:opacity-100 p-2 text-white/30 hover:text-red-400 hover:bg-red-400/10 rounded-lg transition-all shrink-0"
+                  title="Delete Document"
+                >
+                  <Trash2 size={16} />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="py-12 text-center border border-dashed border-[#1f1f1f] rounded-xl bg-white/[0.01]">
+          <p className="text-sm text-white/40">
+            No documents uploaded yet.
+          </p>
         </div>
       )}
     </div>

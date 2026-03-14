@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { FileText } from 'lucide-react';
+import { FileText, Upload } from 'lucide-react';
 import api from '@/lib/api';
 import MessageBubble from '@/components/MessageBubble';
 import ChatInput from '@/components/ChatInput';
@@ -34,6 +34,7 @@ export default function ChatPage() {
     const [messages, setMessages] = useState<Message[]>([]);
     const [loading, setLoading] = useState(false);
     const [fetchingMessages, setFetchingMessages] = useState(true);
+    const [showDocuments, setShowDocuments] = useState(false);
     const bottomRef = useRef<HTMLDivElement>(null);
     const abortRef = useRef<AbortController | null>(null);
 
@@ -114,35 +115,59 @@ export default function ChatPage() {
     }
 
     return (
-        <div className="flex flex-col h-full">
+        <div className="flex flex-col h-full bg-black">
             {/* Header */}
-            <div className="flex items-center gap-3 px-6 py-4 border-b border-[#111] shrink-0">
-                <div>
-                    <h1 className="text-sm font-medium text-white truncate max-w-xs">
-                        {chat?.title || 'Chat'}
-                    </h1>
-                    <p className="text-xs text-white/30">{chat?.model}</p>
+            <div className="flex items-center justify-between px-6 py-4 border-b border-[#111] shrink-0 bg-[#050505]">
+                <div className="flex items-center gap-3">
+                    <div>
+                        <h1 className="text-sm font-medium text-white truncate max-w-xs">
+                            {chat?.title || 'Chat'}
+                        </h1>
+                        <p className="text-xs text-white/30 mt-0.5">{chat?.model}</p>
+                    </div>
                 </div>
+
+                <button
+                    onClick={() => setShowDocuments(!showDocuments)}
+                    className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors border ${
+                        showDocuments 
+                            ? 'bg-white/10 text-white border-white/20' 
+                            : 'bg-transparent text-white/50 border-transparent hover:bg-white/[0.04] hover:text-white/80'
+                    }`}
+                >
+                    <FileText size={14} />
+                    {showDocuments ? 'Back to Chat' : 'Documents'}
+                </button>
             </div>
 
-            {/* Document Panel */}
-            <DocumentPanel chatId={chatId} />
-
-            {/* Messages */}
-            <div className="flex-1 overflow-y-auto py-4">
-                {messages.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center h-full text-center px-4 gap-3">
-                        <div className="w-10 h-10 rounded-xl bg-white/5 border border-[#1a1a1a] flex items-center justify-center">
-                            <FileText size={16} className="text-white/30" />
-                        </div>
-                        <div>
-                            <p className="text-white/40 text-sm font-medium">Start the conversation</p>
-                            <p className="text-white/20 text-xs mt-0.5">
-                                Upload documents and ask questions about them.
-                            </p>
-                        </div>
-                    </div>
-                ) : (
+            {showDocuments ? (
+                <div className="flex-1 overflow-y-auto">
+                    <DocumentPanel chatId={chatId} />
+                </div>
+            ) : (
+                <>
+                    {/* Messages */}
+                    <div className="flex-1 overflow-y-auto py-4">
+                        {messages.length === 0 ? (
+                            <div className="flex flex-col items-center justify-center h-full text-center px-4 gap-4">
+                                <div className="w-12 h-12 rounded-xl bg-white/5 border border-[#1a1a1a] flex items-center justify-center">
+                                    <FileText size={20} className="text-white/30" />
+                                </div>
+                                <div>
+                                    <p className="text-white/60 text-base font-medium">Start the conversation</p>
+                                    <p className="text-white/30 text-sm mt-1 max-w-xs mx-auto">
+                                        Upload documents to enable grounded RAG answering, or just chat.
+                                    </p>
+                                </div>
+                                <button
+                                    onClick={() => setShowDocuments(true)}
+                                    className="mt-2 text-xs font-medium bg-white border border-white/10 hover:bg-white/90 text-black px-4 py-2 rounded-lg transition-colors flex items-center gap-2"
+                                >
+                                    <Upload size={14} />
+                                    Upload Documents
+                                </button>
+                            </div>
+                        ) : (
                     <div className="max-w-3xl mx-auto w-full space-y-1">
                         {messages.map((msg) => (
                             <MessageBubble key={msg.id} role={msg.role} content={msg.content} />
@@ -162,20 +187,22 @@ export default function ChatPage() {
                                     </div>
                                 </div>
                             </div>
-                        )}
+                            )}
 
-                        <div ref={bottomRef} />
+                            <div ref={bottomRef} />
+                        </div>
+                    )}
                     </div>
-                )}
-            </div>
 
-            {/* Input */}
-            <ChatInput
-                onSend={handleSend}
-                loading={loading}
-                onStop={handleStop}
-                initialModel={(chat?.model as AIModel) || 'gemini-2.5-flash'}
-            />
+                    {/* Input */}
+                    <ChatInput
+                        onSend={handleSend}
+                        loading={loading}
+                        onStop={handleStop}
+                        initialModel={(chat?.model as AIModel) || 'gemini-2.5-flash'}
+                    />
+                </>
+            )}
         </div>
     );
 }
