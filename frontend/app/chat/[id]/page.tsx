@@ -6,6 +6,7 @@ import { FileText } from 'lucide-react';
 import api from '@/lib/api';
 import MessageBubble from '@/components/MessageBubble';
 import ChatInput from '@/components/ChatInput';
+import DocumentPanel from '@/components/DocumentPanel';
 import type { AIModel } from '@/components/ModelSelector';
 import toast from 'react-hot-toast';
 
@@ -124,6 +125,9 @@ export default function ChatPage() {
                 </div>
             </div>
 
+            {/* Document Panel */}
+            <DocumentPanel chatId={chatId} />
+
             {/* Messages */}
             <div className="flex-1 overflow-y-auto py-4">
                 {messages.length === 0 ? (
@@ -170,7 +174,7 @@ export default function ChatPage() {
                 onSend={handleSend}
                 loading={loading}
                 onStop={handleStop}
-                initialModel={(chat?.model as AIModel) || 'gemini-1.5-flash'}
+                initialModel={(chat?.model as AIModel) || 'gemini-2.5-flash'}
             />
         </div>
     );

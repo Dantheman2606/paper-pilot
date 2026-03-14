@@ -11,9 +11,9 @@ interface ChatInputProps {
     initialModel?: AIModel;
 }
 
-export default function ChatInput({ onSend, loading, onStop, initialModel }: ChatInputProps) {
+export default function ChatInput({ onSend, loading, onStop, initialModel = 'gemini-2.5-flash' }: ChatInputProps) {
     const [message, setMessage] = useState('');
-    const [model, setModel] = useState<AIModel>(initialModel || 'gemini-1.5-flash');
+    const [model, setModel] = useState<AIModel>(initialModel);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
 
     // Auto-resize textarea

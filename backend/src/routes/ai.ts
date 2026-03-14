@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { query } from '../db/pool';
 import { authenticate, AuthRequest } from '../middleware/auth';
 import { logAIRequest } from '../utils/logger';
+import { retrieveContext, buildSystemPrompt, NO_DOCUMENTS_PROMPT } from '../utils/retrieval';
 
 const router = Router();
 
@@ -20,10 +21,6 @@ const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash-l
 const OPENAI_MODELS = ['gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini'];
 
 // POST /api/ai/chat
-// Design notes for RAG Phase 2:
-//   1. After saving user message, fetch relevant document chunks (vector search)
-//   2. Inject chunks as system context before history
-//   3. Return streaming response
 router.post('/chat', async (req: AuthRequest, res: Response): Promise<void> => {
     try {
         const parsed = chatRequestSchema.safeParse(req.body);
@@ -45,6 +42,20 @@ router.post('/chat', async (req: AuthRequest, res: Response): Promise<void> => {
             return;
         }
 
+        // Check if any ready documents exist for this chat
+        const docCheck = await query(
+            `SELECT COUNT(*) FROM documents WHERE chat_id = $1 AND embedding_status = 'ready'`,
+            [chatId]
+        );
+        const hasDocuments = parseInt(docCheck.rows[0].count) > 0;
+
+        // Check if ANY documents exist (including processing)
+        const anyDocCheck = await query(
+            `SELECT COUNT(*) FROM documents WHERE chat_id = $1`,
+            [chatId]
+        );
+        const anyDocuments = parseInt(anyDocCheck.rows[0].count) > 0;
+
         // Fetch conversation history
         const historyResult = await query(
             'SELECT role, content FROM messages WHERE chat_id = $1 ORDER BY created_at ASC',
@@ -57,23 +68,48 @@ router.post('/chat', async (req: AuthRequest, res: Response): Promise<void> => {
             [chatId, 'user', message]
         );
 
-        // -----------------------------------------------------------------------
-        // RAG Phase 2 hook — inject retrieved context here:
-        // const ragContext = await retrieveRelevantChunks(chatId, message);
-        // const systemPrompt = buildSystemPrompt(ragContext);
-        // -----------------------------------------------------------------------
+        // --- RAG context retrieval ---
+        let systemPrompt: string | null = null;
+        let ragContext: string | null = null;
+
+        if (anyDocuments && !hasDocuments) {
+            // Documents exist but still processing — tell user to wait
+            const processingReply = 'Your documents are still being processed. Please wait a moment and try again.';
+            await query(
+                'INSERT INTO messages (chat_id, role, content) VALUES ($1, $2, $3)',
+                [chatId, 'assistant', processingReply]
+            );
+            await query('UPDATE chats SET updated_at = NOW() WHERE id = $1', [chatId]);
+            res.json({ message: { role: 'assistant', content: processingReply } });
+            return;
+        }
+
+        if (hasDocuments) {
+            ragContext = await retrieveContext(chatId, message);
+            if (ragContext) {
+                systemPrompt = buildSystemPrompt(ragContext);
+            } else {
+                // Documents exist but retrieval returned nothing (edge case)
+                systemPrompt = buildSystemPrompt('(No relevant sections found in the uploaded documents.)');
+            }
+        } else {
+            // No documents at all
+            systemPrompt = NO_DOCUMENTS_PROMPT;
+        }
 
         let assistantContent = '';
 
         if (GEMINI_MODELS.includes(model)) {
-            assistantContent = await callGemini(model, historyResult.rows, message, {
+            assistantContent = await callGemini(model, historyResult.rows, message, systemPrompt, {
                 userId: req.user!.userId,
                 chatId,
+                ragContext,
             });
         } else if (OPENAI_MODELS.includes(model)) {
-            assistantContent = await callOpenAI(model, historyResult.rows, message, {
+            assistantContent = await callOpenAI(model, historyResult.rows, message, systemPrompt, {
                 userId: req.user!.userId,
                 chatId,
+                ragContext,
             });
         } else {
             res.status(400).json({ error: 'Unknown model' });
@@ -114,7 +150,8 @@ async function callGemini(
     model: string,
     history: { role: string; content: string }[],
     userMessage: string,
-    ctx?: { userId: string; chatId: string }
+    systemPrompt: string | null,
+    ctx: { userId: string; chatId: string; ragContext: string | null }
 ): Promise<string> {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) throw new Error('Gemini API key not configured');
@@ -127,19 +164,23 @@ async function callGemini(
         { role: 'user', parts: [{ text: userMessage }] },
     ];
 
-    const payload = {
+    const payload: Record<string, unknown> = {
         contents,
-        generationConfig: { temperature: 0.7, maxOutputTokens: 2048 },
+        generationConfig: { temperature: 0.2, maxOutputTokens: 2048 },
     };
+
+    if (systemPrompt) {
+        payload.systemInstruction = { parts: [{ text: systemPrompt }] };
+    }
 
     logAIRequest({
         timestamp: new Date().toISOString(),
-        userId: ctx?.userId ?? 'unknown',
-        chatId: ctx?.chatId ?? 'unknown',
+        userId: ctx.userId,
+        chatId: ctx.chatId,
         model,
         userMessage,
         history,
-        sentPayload: payload,
+        sentPayload: { ...payload, __ragContext: ctx.ragContext },
     });
 
     const response = await fetch(
@@ -167,26 +208,33 @@ async function callOpenAI(
     model: string,
     history: { role: string; content: string }[],
     userMessage: string,
-    ctx?: { userId: string; chatId: string }
+    systemPrompt: string | null,
+    ctx: { userId: string; chatId: string; ragContext: string | null }
 ): Promise<string> {
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) throw new Error('OpenAI API key not configured');
 
-    const messages = [
-        ...history.map((m) => ({ role: m.role, content: m.content })),
-        { role: 'user', content: userMessage },
-    ];
+    const messages: { role: string; content: string }[] = [];
 
-    const payload = { model, messages, temperature: 0.7, max_tokens: 2048 };
+    if (systemPrompt) {
+        messages.push({ role: 'system', content: systemPrompt });
+    }
+
+    messages.push(
+        ...history.map((m) => ({ role: m.role, content: m.content })),
+        { role: 'user', content: userMessage }
+    );
+
+    const payload = { model, messages, temperature: 0.2, max_tokens: 2048 };
 
     logAIRequest({
         timestamp: new Date().toISOString(),
-        userId: ctx?.userId ?? 'unknown',
-        chatId: ctx?.chatId ?? 'unknown',
+        userId: ctx.userId,
+        chatId: ctx.chatId,
         model,
         userMessage,
         history,
-        sentPayload: payload,
+        sentPayload: { ...payload, __ragContext: ctx.ragContext },
     });
 
     const response = await fetch('https://api.openai.com/v1/chat/completions', {

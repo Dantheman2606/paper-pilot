@@ -5,3 +5,5 @@ dist/
 logs/
 uploads/
 .DS_Store
+
+*.txt
