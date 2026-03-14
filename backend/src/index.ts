@@ -12,6 +12,7 @@ import messageRoutes from './routes/messages';
 import documentRoutes from './routes/documents';
 import aiRoutes from './routes/ai';
 import { errorHandler, notFound } from './middleware/errorHandler';
+import { httpLogger } from './utils/logger';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '5000');
@@ -52,6 +53,9 @@ const aiLimiter = rateLimit({
 // Body parsing
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
+
+// Dev HTTP request logger (runs after body parsing so body is available)
+app.use(httpLogger);
 
 // Health check
 app.get('/health', (_req, res) => {

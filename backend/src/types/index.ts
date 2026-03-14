@@ -45,8 +45,9 @@ export interface AuthPayload {
 }
 
 export type AIModel =
-    | 'gemini-1.5-flash'
-    | 'gemini-1.5-pro'
-    | 'gpt-4o'
+    | 'gemini-2.5-flash'
+    | 'gemini-2.5-pro'
+    | 'gemini-2.0-flash-lite'
     | 'gpt-4o-mini'
-    | 'gpt-3.5-turbo';
+    | 'gpt-4o'
+    | 'gpt-4.1-mini';

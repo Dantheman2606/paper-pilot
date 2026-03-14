@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { z } from 'zod';
 import { query } from '../db/pool';
 import { authenticate, AuthRequest } from '../middleware/auth';
+import { logAIRequest } from '../utils/logger';
 
 const router = Router();
 
@@ -11,12 +12,12 @@ const chatRequestSchema = z.object({
     chatId: z.string().uuid(),
     message: z.string().min(1).max(10000),
     model: z
-        .enum(['gemini-1.5-flash', 'gemini-1.5-pro', 'gpt-4o', 'gpt-4o-mini', 'gpt-3.5-turbo'])
-        .default('gemini-1.5-flash'),
+        .enum(['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash-lite', 'gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini'])
+        .default('gemini-2.5-flash'),
 });
 
-const GEMINI_MODELS = ['gemini-1.5-flash', 'gemini-1.5-pro'];
-const OPENAI_MODELS = ['gpt-4o', 'gpt-4o-mini', 'gpt-3.5-turbo'];
+const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash-lite'];
+const OPENAI_MODELS = ['gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini'];
 
 // POST /api/ai/chat
 // Design notes for RAG Phase 2:
@@ -65,9 +66,15 @@ router.post('/chat', async (req: AuthRequest, res: Response): Promise<void> => {
         let assistantContent = '';
 
         if (GEMINI_MODELS.includes(model)) {
-            assistantContent = await callGemini(model, historyResult.rows, message);
+            assistantContent = await callGemini(model, historyResult.rows, message, {
+                userId: req.user!.userId,
+                chatId,
+            });
         } else if (OPENAI_MODELS.includes(model)) {
-            assistantContent = await callOpenAI(model, historyResult.rows, message);
+            assistantContent = await callOpenAI(model, historyResult.rows, message, {
+                userId: req.user!.userId,
+                chatId,
+            });
         } else {
             res.status(400).json({ error: 'Unknown model' });
             return;
@@ -106,7 +113,8 @@ router.post('/chat', async (req: AuthRequest, res: Response): Promise<void> => {
 async function callGemini(
     model: string,
     history: { role: string; content: string }[],
-    userMessage: string
+    userMessage: string,
+    ctx?: { userId: string; chatId: string }
 ): Promise<string> {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) throw new Error('Gemini API key not configured');
@@ -119,18 +127,27 @@ async function callGemini(
         { role: 'user', parts: [{ text: userMessage }] },
     ];
 
+    const payload = {
+        contents,
+        generationConfig: { temperature: 0.7, maxOutputTokens: 2048 },
+    };
+
+    logAIRequest({
+        timestamp: new Date().toISOString(),
+        userId: ctx?.userId ?? 'unknown',
+        chatId: ctx?.chatId ?? 'unknown',
+        model,
+        userMessage,
+        history,
+        sentPayload: payload,
+    });
+
     const response = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
         {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                contents,
-                generationConfig: {
-                    temperature: 0.7,
-                    maxOutputTokens: 2048,
-                },
-            }),
+            body: JSON.stringify(payload),
         }
     );
 
@@ -149,7 +166,8 @@ async function callGemini(
 async function callOpenAI(
     model: string,
     history: { role: string; content: string }[],
-    userMessage: string
+    userMessage: string,
+    ctx?: { userId: string; chatId: string }
 ): Promise<string> {
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) throw new Error('OpenAI API key not configured');
@@ -159,18 +177,25 @@ async function callOpenAI(
         { role: 'user', content: userMessage },
     ];
 
+    const payload = { model, messages, temperature: 0.7, max_tokens: 2048 };
+
+    logAIRequest({
+        timestamp: new Date().toISOString(),
+        userId: ctx?.userId ?? 'unknown',
+        chatId: ctx?.chatId ?? 'unknown',
+        model,
+        userMessage,
+        history,
+        sentPayload: payload,
+    });
+
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${apiKey}`,
         },
-        body: JSON.stringify({
-            model,
-            messages,
-            temperature: 0.7,
-            max_tokens: 2048,
-        }),
+        body: JSON.stringify(payload),
     });
 
     if (!response.ok) {

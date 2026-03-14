@@ -11,9 +11,9 @@ router.use(authenticate);
 const createChatSchema = z.object({
     title: z.string().min(1).max(500).optional().default('New Chat'),
     model: z
-        .enum(['gemini-1.5-flash', 'gemini-1.5-pro', 'gpt-4o', 'gpt-4o-mini', 'gpt-3.5-turbo'])
+        .enum(['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash-lite', 'gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini'])
         .optional()
-        .default('gemini-1.5-flash'),
+        .default('gemini-2.5-flash'),
 });
 
 const updateChatSchema = z.object({
