@@ -11,6 +11,7 @@ import chatRoutes from './routes/chats';
 import messageRoutes from './routes/messages';
 import documentRoutes from './routes/documents';
 import aiRoutes from './routes/ai';
+import { initMinio } from './utils/minioClient';
 import { errorHandler, notFound } from './middleware/errorHandler';
 import { httpLogger } from './utils/logger';
 
@@ -69,13 +70,24 @@ app.use('/api/chats/:chatId/messages', messageRoutes);
 app.use('/api/chats/:chatId/documents', documentRoutes);
 app.use('/api/ai', aiLimiter, aiRoutes);
 
+// Handle unhandled routes
+app.use((_req, res) => {
+    res.status(404).json({ error: 'Endpoint not found' });
+});
+
 // Error handling
-app.use(notFound);
 app.use(errorHandler);
 
-app.listen(PORT, () => {
-    console.log(`🚀 Paper Pilot API running on http://localhost:${PORT}`);
-    console.log(`📦 Environment: ${process.env.NODE_ENV || 'development'}`);
-});
+// Initialize services and start server
+async function startServer() {
+    await initMinio();
+    
+    app.listen(PORT, () => {
+        console.log(`🚀 Paper Pilot API running on http://localhost:${PORT}`);
+        console.log(`📦 Environment: ${process.env.NODE_ENV || 'development'}`);
+    });
+}
+
+startServer();
 
 export default app;

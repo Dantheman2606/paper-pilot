@@ -1,4 +1,4 @@
-import { query } from '../db/pool';
+import pool from '../db/pool';
 import { parseFile } from './pdfParser';
 import { chunkText } from './chunker';
 import { embedTexts } from './embeddings';
@@ -54,7 +54,7 @@ export async function processDocument(doc: DocumentRecord): Promise<void> {
     console.log(`[pipeline] Upserted to ChromaDB`);
 
     // 5 — Mark as ready
-    await query(
+    await pool.query(
       `UPDATE documents SET embedding_status = 'ready', chunk_count = $1 WHERE id = $2`,
       [chunks.length, doc.id]
     );
@@ -64,7 +64,7 @@ export async function processDocument(doc: DocumentRecord): Promise<void> {
     const message = err instanceof Error ? err.message : 'Unknown error';
     console.error(`[pipeline] Failed to process document ${doc.id}:`, message);
 
-    await query(
+    await pool.query(
       `UPDATE documents SET embedding_status = 'failed' WHERE id = $1`,
       [doc.id]
     );

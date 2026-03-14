@@ -1,15 +1,26 @@
-import fs from 'fs';
 import path from 'path';
+import { minioClient, MINIO_BUCKET } from './minioClient';
+import { Readable } from 'stream';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const pdfParse = require('pdf-parse');
 
+async function streamToBuffer(stream: Readable): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) {
+    chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+  }
+  return Buffer.concat(chunks);
+}
+
 /**
- * Extract plain text from a file on disk.
+ * Extract plain text from a file stored in MinIO.
  * Supports PDF, TXT, and MD.
  */
-export async function parseFile(filePath: string, mimeType?: string): Promise<string> {
-  const ext = path.extname(filePath).toLowerCase();
-  const buffer = fs.readFileSync(filePath);
+export async function parseFile(objectKey: string, mimeType?: string): Promise<string> {
+  const ext = path.extname(objectKey).toLowerCase();
+  
+  const dataStream = await minioClient.getObject(MINIO_BUCKET, objectKey);
+  const buffer = await streamToBuffer(dataStream);
 
   if (ext === '.pdf' || mimeType === 'application/pdf') {
     const fn = typeof pdfParse === 'function' ? pdfParse : (pdfParse.PDFParse || pdfParse.default);

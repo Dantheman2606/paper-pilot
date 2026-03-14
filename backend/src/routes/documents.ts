@@ -1,43 +1,33 @@
 import { Router, Response } from 'express';
 import multer from 'multer';
 import path from 'path';
-import fs from 'fs';
+import fs from 'fs'; // Keep fs for initial uploadDir check if needed, but not for file operations
 import { v4 as uuidv4 } from 'uuid';
-import { query } from '../db/pool';
+import pool from '../db/pool'; // Changed from { query } to pool
 import { authenticate, AuthRequest } from '../middleware/auth';
 import { processDocument } from '../utils/pipeline';
 import { deleteDocumentChunks } from '../utils/chromaClient';
+import { minioClient, MINIO_BUCKET } from '../utils/minioClient'; // Added MinIO imports
 
 const router = Router({ mergeParams: true });
 
 router.use(authenticate);
 
 // Configure multer storage
-const uploadDir = process.env.UPLOAD_DIR || './uploads';
-if (!fs.existsSync(uploadDir)) {
-    fs.mkdirSync(uploadDir, { recursive: true });
-}
-
-const storage = multer.diskStorage({
-    destination: (_req, _file, cb) => cb(null, uploadDir),
-    filename: (_req, file, cb) => {
-        const ext = path.extname(file.originalname);
-        cb(null, `${uuidv4()}${ext}`);
-    },
-});
+// Use memory storage for direct upload to MinIO
+const storage = multer.memoryStorage();
 
 const upload = multer({
     storage,
-    limits: {
-        fileSize: parseInt(process.env.MAX_FILE_SIZE_MB || '10') * 1024 * 1024,
-    },
-    fileFilter: (_req, file, cb) => {
-        const allowed = ['.pdf', '.txt', '.md'];
+    limits: { fileSize: parseInt(process.env.MAX_FILE_SIZE_MB || '10') * 1024 * 1024 },
+    fileFilter: (_req, file, cb) => { // Changed req to _req as it's not used
+        const allowedExtensions = ['.pdf', '.txt', '.md'];
         const ext = path.extname(file.originalname).toLowerCase();
-        if (allowed.includes(ext)) {
+
+        if (allowedExtensions.includes(ext)) {
             cb(null, true);
         } else {
-            cb(new Error('Only PDF, TXT, and MD files are supported'));
+            cb(new Error('Only PDF, TXT, and MD files are allowed'));
         }
     },
 });
@@ -45,7 +35,7 @@ const upload = multer({
 // GET /api/chats/:chatId/documents
 router.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
     try {
-        const chatResult = await query(
+        const chatResult = await pool.query( // Changed query to pool.query
             'SELECT id FROM chats WHERE id = $1 AND user_id = $2',
             [req.params.chatId, req.user!.userId]
         );
@@ -55,7 +45,7 @@ router.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
             return;
         }
 
-        const docs = await query(
+        const docs = await pool.query( // Changed query to pool.query
             `SELECT id, original_name, mime_type, size_bytes, embedding_status, chunk_count, created_at
        FROM documents WHERE chat_id = $1 ORDER BY created_at DESC`,
             [req.params.chatId]
@@ -71,13 +61,13 @@ router.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
 // POST /api/chats/:chatId/documents — upload + trigger RAG pipeline
 router.post('/', upload.single('file'), async (req: AuthRequest, res: Response): Promise<void> => {
     try {
-        const chatResult = await query(
-            'SELECT id FROM chats WHERE id = $1 AND user_id = $2',
-            [req.params.chatId, req.user!.userId]
+        // Check if chat exists and belongs to user
+        const chatCheck = await pool.query(
+            `SELECT id FROM chats WHERE id = $1 AND user_id = $2`,
+            [req.params.chatId, req.user!.userId] // Changed req.userId to req.user!.userId
         );
 
-        if (chatResult.rows.length === 0) {
-            if (req.file) fs.unlinkSync(req.file.path);
+        if (chatCheck.rowCount === 0) {
             res.status(404).json({ error: 'Chat not found' });
             return;
         }
@@ -87,38 +77,49 @@ router.post('/', upload.single('file'), async (req: AuthRequest, res: Response):
             return;
         }
 
-        // Insert document record with status 'processing'
-        const result = await query(
-            `INSERT INTO documents (chat_id, user_id, original_name, storage_path, mime_type, size_bytes, embedding_status)
-       VALUES ($1, $2, $3, $4, $5, $6, 'processing')
-       RETURNING id, original_name, mime_type, size_bytes, embedding_status, chunk_count, created_at`,
-            [
-                req.params.chatId,
-                req.user!.userId,
-                req.file.originalname,
-                req.file.path,
-                req.file.mimetype,
-                req.file.size,
-            ]
+        // Generate unique object key for MinIO
+        const ext = path.extname(req.file.originalname);
+        const objectKey = `${req.params.chatId}/${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`;
+
+        // Upload directly to MinIO from memory buffer
+        await minioClient.putObject(
+            MINIO_BUCKET,
+            objectKey,
+            req.file.buffer,
+            req.file.size,
+            { 'Content-Type': req.file.mimetype }
         );
 
-        const doc = result.rows[0];
+        // Insert document record with status 'pending'
+        const result = await pool.query( // Changed query to pool.query
+            `INSERT INTO documents (chat_id, user_id, original_name, storage_path, mime_type, size_bytes, embedding_status)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
+             RETURNING id, original_name, mime_type, size_bytes, embedding_status, chunk_count, created_at`, // Removed storage_path from RETURNING as it's not needed for the response
+            [
+                req.params.chatId,
+                req.user!.userId, // Changed req.userId to req.user!.userId
+                req.file.originalname,
+                objectKey, // Storing MinIO object key here
+                req.file.mimetype,
+                req.file.size,
+                'pending'
+            ]
+        );
+        const doc = result.rows[0]; // Corrected assignment
 
         // Fire the RAG pipeline asynchronously (don't await — respond immediately)
         processDocument({
             id: doc.id,
             chat_id: req.params.chatId as string,
             original_name: doc.original_name,
-            storage_path: req.file.path,
-            mime_type: req.file.mimetype,
+            storage_path: objectKey, // Use the objectKey for pipeline
+            mime_type: doc.mime_type, // Use doc.mime_type
         }).catch((err) => console.error('[documents] Pipeline error:', err));
 
         res.status(201).json(doc);
     } catch (err) {
         console.error('Upload document error:', err);
-        if (req.file && fs.existsSync(req.file.path)) {
-            fs.unlinkSync(req.file.path);
-        }
+        // No need to unlink local file as we are using memory storage and MinIO
         res.status(500).json({ error: 'Internal server error' });
     }
 });
@@ -126,7 +127,7 @@ router.post('/', upload.single('file'), async (req: AuthRequest, res: Response):
 // GET /api/chats/:chatId/documents/:docId/status — poll embedding status
 router.get('/:docId/status', async (req: AuthRequest, res: Response): Promise<void> => {
     try {
-        const result = await query(
+        const result = await pool.query( // Changed query to pool.query
             `SELECT id, embedding_status, chunk_count
        FROM documents
        WHERE id = $1 AND chat_id = $2`,
@@ -148,7 +149,7 @@ router.get('/:docId/status', async (req: AuthRequest, res: Response): Promise<vo
 // DELETE /api/chats/:chatId/documents/:docId
 router.delete('/:docId', async (req: AuthRequest, res: Response): Promise<void> => {
     try {
-        const chatResult = await query(
+        const chatResult = await pool.query( // Changed query to pool.query
             'SELECT id FROM chats WHERE id = $1 AND user_id = $2',
             [req.params.chatId, req.user!.userId]
         );
@@ -158,7 +159,7 @@ router.delete('/:docId', async (req: AuthRequest, res: Response): Promise<void> 
             return;
         }
 
-        const docResult = await query(
+        const docResult = await pool.query( // Changed query to pool.query
             'DELETE FROM documents WHERE id = $1 AND chat_id = $2 RETURNING id, storage_path',
             [req.params.docId, req.params.chatId]
         );
@@ -170,13 +171,17 @@ router.delete('/:docId', async (req: AuthRequest, res: Response): Promise<void> 
 
         const { id: docId, storage_path } = docResult.rows[0];
 
-        // Delete file from disk
-        if (fs.existsSync(storage_path)) {
-            fs.unlinkSync(storage_path);
+        // Delete file from MinIO
+        try {
+            if (storage_path) { // Use storage_path from the destructured object
+                await minioClient.removeObject(MINIO_BUCKET, storage_path);
+            }
+        } catch (err) {
+            console.error(`Failed to delete file ${storage_path} from MinIO:`, err);
         }
 
-        // Delete chunks from ChromaDB
-        deleteDocumentChunks(docId).catch((err) =>
+        // Delete related chunks from ChromaDB collection
+        deleteDocumentChunks(docId).catch((err) => // Corrected call
             console.error('[documents] Failed to delete ChromaDB chunks:', err)
         );
 
