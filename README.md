@@ -27,9 +27,27 @@ Paper Pilot is a full-stack, AI-powered document exploration chatbot. It uses Re
 - [pdf-parse](https://www.npmjs.com/package/pdf-parse) (Document Extraction)
 - Google `text-embedding-004` API (Embedding Generation)
 
+## 🐳 1-Click Docker Setup (Recommended)
+
+The easiest way to run the entire Paper Pilot stack (Frontend, Backend, PostgreSQL, MinIO, and ChromaDB) is via Docker Compose.
+
+1. Ensure [Docker Desktop](https://www.docker.com/products/docker-desktop/) is installed and running.
+2. Clone this repository and navigate to the root directory.
+3. Open `backend/.env` and ensure your `GEMINI_API_KEY` is set.
+4. Run the following command in the root of the project:
+   ```bash
+   docker-compose up --build -d
+   ```
+5. You're done! The services will boot up and bind to your local ports:
+   - **Frontend:** http://localhost:3000
+   - **Backend API:** http://localhost:5000
+   - **MinIO Dashboard:** http://localhost:9001 (admin / password)
+
+*Note: The first launch may take a few minutes as it downloads the Postgres, MinIO, and Node images. To stop the stack, run `docker-compose down`.*
+
 ---
 
-## ⚙️ Quick Setup
+## ⚙️ Manual Quick Setup
 
 ### 1. Prerequisites
 - Node.js (v18+)

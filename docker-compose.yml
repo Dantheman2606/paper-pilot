@@ -1,0 +1,94 @@
+version: '3.8'
+
+services:
+  # 1. PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: paper-pilot-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: paper_pilot
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d paper_pilot"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # 2. MinIO S3 Object Storage
+  minio:
+    image: quay.io/minio/minio
+    container_name: paper-pilot-minio
+    ports:
+      - "9000:9000" # S3 API
+      - "9001:9001" # Web Console
+    environment:
+      MINIO_ROOT_USER: admin
+      MINIO_ROOT_PASSWORD: password
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    restart: unless-stopped
+
+  # 3. ChromaDB Vector Store
+  chroma:
+    image: chromadb/chroma
+    container_name: paper-pilot-chroma
+    ports:
+      - "8000:8000"
+    volumes:
+      - chroma_data:/chroma/chroma
+    restart: unless-stopped
+
+  # 4. Backend (Express Node.js)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: paper-pilot-backend
+    ports:
+      - "5000:5000"
+    env_file:
+      - ./backend/.env # Pull API keys from local .env
+    environment:
+      # Override local URIs to point to the internal docker network containers
+      - PORT=5000
+      - DATABASE_URL=postgresql://postgres:password@postgres:5432/paper_pilot
+      - CHROMA_URL=http://chroma:8000
+      - MINIO_ENDPOINT=minio
+      - MINIO_PORT=9000
+      - MINIO_USE_SSL=false
+      - ALLOWED_ORIGINS=http://localhost:3000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+      chroma:
+        condition: service_started
+    restart: unless-stopped
+
+  # 5. Frontend (Next.js)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: paper-pilot-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      # Tell the frontend to talk to the backend publicly exposed on 5000 on the host machine
+      - NEXT_PUBLIC_API_URL=http://localhost:5000/api
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  minio_data:
+  chroma_data:
