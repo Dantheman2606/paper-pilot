@@ -1,8 +1,11 @@
-FROM node:18-alpine
+FROM node:20-alpine
+
+# Install postgresql-client to allow running psql commands
+RUN apk add --no-cache postgresql-client
 
 WORKDIR /app
 
-# Copy package descriptors
+# Copy package descriptors 
 COPY package*.json ./
 
 # Install dependencies
@@ -12,7 +15,8 @@ RUN npm install
 COPY . .
 
 # Expose port
-EXPOSE 3000
+EXPOSE 5000
 
-# Start Next.js in dev mode to allow runtime env vars
-CMD ["npm", "run", "dev"]
+# Construct the connection string manually using your .env variables
+# Format: postgresql://USER:PASSWORD@HOST:PORT/NAME
+CMD ["sh", "-c", "psql postgresql://$DB_USER:$DB_PASSWORD@$DB_HOST:$DB_PORT/$DB_NAME -f /app/src/db/schema.sql && npm run dev"]
